@@ -110,6 +110,19 @@ end
 function _M.e2ee_round_trip(api_key, model, body_json, is_streaming, e2e_path, on_chunk)
     local err
 
+    -- Strip :THINKING suffix and enable thinking mode in chat_template_kwargs.
+    -- Users can also control thinking directly via chat_template_kwargs in
+    -- the request body; this is just the :THINKING shorthand from chutes-api.
+    if model:sub(-9) == ":THINKING" then
+        model = model:match("^(.-):THINKING")
+        local payload = cjson.decode(body_json)
+        payload.model = model
+        payload.chat_template_kwargs = payload.chat_template_kwargs or {}
+        payload.chat_template_kwargs.thinking = true
+        payload.chat_template_kwargs.enable_thinking = true
+        body_json = cjson.encode(payload)
+    end
+
     -- Resolve model -> chute_id
     local chute_id
     chute_id, err = discovery.resolve_chute_id(model, api_key)
