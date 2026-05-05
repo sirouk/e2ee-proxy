@@ -110,16 +110,49 @@ end
 function _M.e2ee_round_trip(api_key, model, body_json, is_streaming, e2e_path, on_chunk)
     local err
 
-    -- Strip :THINKING suffix and enable thinking mode in chat_template_kwargs.
-    -- Users can also control thinking directly via chat_template_kwargs in
-    -- the request body; this is just the :THINKING shorthand from chutes-api.
-    if model:sub(-9) == ":THINKING" then
-        model = model:match("^(.-):THINKING")
-        local payload = cjson.decode(body_json)
-        payload.model = model
-        payload.chat_template_kwargs = payload.chat_template_kwargs or {}
-        payload.chat_template_kwargs.thinking = true
-        payload.chat_template_kwargs.enable_thinking = true
+    local payload = cjson.decode(body_json)
+    local changed = false
+    if payload then
+        local thinking = nil
+        if model:sub(-9) == ":THINKING" then
+            model = model:match("^(.-):THINKING")
+            payload.model = model
+            thinking = true
+            changed = true
+        end
+
+        local headers = ngx.req.get_headers()
+        local thinking_header = headers["X-Enable-Thinking"] or headers["x-enable-thinking"]
+        if type(thinking_header) == "table" then
+            thinking_header = thinking_header[1]
+        end
+        thinking_header = type(thinking_header) == "string" and thinking_header:lower() or thinking_header
+        if thinking_header == true or thinking_header == false
+           or thinking_header == "true" or thinking_header == "false" then
+            thinking = thinking_header == true or thinking_header == "true"
+            changed = true
+        end
+
+        local kwargs = type(payload.chat_template_kwargs) == "table" and payload.chat_template_kwargs or nil
+        if thinking ~= nil then
+            kwargs = kwargs or {}
+            payload.chat_template_kwargs = kwargs
+            kwargs.thinking = thinking
+            kwargs.enable_thinking = thinking
+        end
+        if kwargs then
+            if kwargs.thinking ~= nil and kwargs.enable_thinking == nil then
+                kwargs.enable_thinking = kwargs.thinking
+                changed = true
+            end
+            if kwargs.enable_thinking ~= nil and kwargs.thinking == nil then
+                kwargs.thinking = kwargs.enable_thinking
+                changed = true
+            end
+        end
+    end
+
+    if changed then
         body_json = cjson.encode(payload)
     end
 
