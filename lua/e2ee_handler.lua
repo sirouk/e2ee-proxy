@@ -14,8 +14,19 @@ local cjson = require("cjson.safe")
 local http = require("resty.http")
 
 local API_BASE = "https://api.chutes.ai"
+local payload_cjson
 
 local _M = {}
+
+local function get_payload_cjson()
+    if not payload_cjson then
+        payload_cjson = cjson.new()
+        if payload_cjson.decode_array_with_array_mt then
+            payload_cjson.decode_array_with_array_mt(true)
+        end
+    end
+    return payload_cjson
+end
 
 --- Extract API key from Authorization header or x-api-key
 function _M.get_api_key()
@@ -137,7 +148,8 @@ function _M.e2ee_round_trip(api_key, model, body_json, is_streaming, e2e_path, o
             or (kwargs_hint.enable_thinking ~= nil and kwargs_hint.thinking == nil))
 
     if thinking ~= nil or normalize_kwargs then
-        local payload = cjson.decode(body_json)
+        local json = get_payload_cjson()
+        local payload = json.decode(body_json)
         if payload then
             if base_model then
                 payload.model = model
@@ -145,6 +157,9 @@ function _M.e2ee_round_trip(api_key, model, body_json, is_streaming, e2e_path, o
             end
 
             local kwargs = type(payload.chat_template_kwargs) == "table" and payload.chat_template_kwargs or nil
+            if kwargs and getmetatable(kwargs) == json.array_mt then
+                kwargs = nil
+            end
             if thinking ~= nil then
                 kwargs = kwargs or {}
                 kwargs.thinking = thinking
@@ -162,7 +177,7 @@ function _M.e2ee_round_trip(api_key, model, body_json, is_streaming, e2e_path, o
             end
 
             if changed then
-                body_json = cjson.encode(payload)
+                body_json = json.encode(payload)
             end
         end
     end
