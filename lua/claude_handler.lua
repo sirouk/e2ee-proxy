@@ -54,7 +54,7 @@ function _M.handle()
     if not is_streaming then
         -- Non-streaming
         local decrypted, round_err = e2ee.e2ee_round_trip(
-            api_key, model, oai_body, false, "/v1/chat/completions"
+            api_key, model, oai_body, false, "/v1/chat/completions", nil, oai_request
         )
 
         if not decrypted then
@@ -101,7 +101,8 @@ function _M.handle()
                         ngx.flush(true)
                     end
                 end
-            end)
+            end,
+            oai_request)
 
         if round_err then
             if round_err.raw then

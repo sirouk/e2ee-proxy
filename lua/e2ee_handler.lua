@@ -107,53 +107,64 @@ end
 --- E2EE round-trip: encrypt request, send, decrypt response
 -- For non-streaming: returns (decrypted_json_string, nil) or (nil, {status=N, message=S})
 -- For streaming: calls on_chunk(line) for each decrypted SSE data line, on_chunk(nil) at end
-function _M.e2ee_round_trip(api_key, model, body_json, is_streaming, e2e_path, on_chunk)
+function _M.e2ee_round_trip(api_key, model, body_json, is_streaming, e2e_path, on_chunk, request_payload)
     local err
 
-    local payload = cjson.decode(body_json)
+    local thinking
+    local base_model = model:match("^(.-):THINKING$")
     local changed = false
-    if payload then
-        local thinking = nil
-        if model:sub(-9) == ":THINKING" then
-            model = model:match("^(.-):THINKING")
-            payload.model = model
+
+    if base_model then
+        model = base_model
+        thinking = true
+    end
+
+    local h = ngx.var and ngx.var.http_x_enable_thinking
+    if type(h) == "string" then
+        h = h:lower()
+        if h == "true" then
             thinking = true
-            changed = true
-        end
-
-        local headers = ngx.req.get_headers()
-        local thinking_header = headers["X-Enable-Thinking"] or headers["x-enable-thinking"]
-        if type(thinking_header) == "table" then
-            thinking_header = thinking_header[1]
-        end
-        thinking_header = type(thinking_header) == "string" and thinking_header:lower() or thinking_header
-        if thinking_header == true or thinking_header == false
-           or thinking_header == "true" or thinking_header == "false" then
-            thinking = thinking_header == true or thinking_header == "true"
-            changed = true
-        end
-
-        local kwargs = type(payload.chat_template_kwargs) == "table" and payload.chat_template_kwargs or nil
-        if thinking ~= nil then
-            kwargs = kwargs or {}
-            payload.chat_template_kwargs = kwargs
-            kwargs.thinking = thinking
-            kwargs.enable_thinking = thinking
-        end
-        if kwargs then
-            if kwargs.thinking ~= nil and kwargs.enable_thinking == nil then
-                kwargs.enable_thinking = kwargs.thinking
-                changed = true
-            end
-            if kwargs.enable_thinking ~= nil and kwargs.thinking == nil then
-                kwargs.thinking = kwargs.enable_thinking
-                changed = true
-            end
+        elseif h == "false" then
+            thinking = false
         end
     end
 
-    if changed then
-        body_json = cjson.encode(payload)
+    local kwargs_hint = type(request_payload) == "table"
+        and type(request_payload.chat_template_kwargs) == "table"
+        and request_payload.chat_template_kwargs or nil
+    local normalize_kwargs = kwargs_hint
+        and ((kwargs_hint.thinking ~= nil and kwargs_hint.enable_thinking == nil)
+            or (kwargs_hint.enable_thinking ~= nil and kwargs_hint.thinking == nil))
+
+    if thinking ~= nil or normalize_kwargs then
+        local payload = cjson.decode(body_json)
+        if payload then
+            if base_model then
+                payload.model = model
+                changed = true
+            end
+
+            local kwargs = type(payload.chat_template_kwargs) == "table" and payload.chat_template_kwargs or nil
+            if thinking ~= nil then
+                kwargs = kwargs or {}
+                kwargs.thinking = thinking
+                kwargs.enable_thinking = thinking
+                payload.chat_template_kwargs = kwargs
+                changed = true
+            elseif kwargs then
+                if kwargs.thinking ~= nil and kwargs.enable_thinking == nil then
+                    kwargs.enable_thinking = kwargs.thinking
+                    changed = true
+                elseif kwargs.enable_thinking ~= nil and kwargs.thinking == nil then
+                    kwargs.thinking = kwargs.enable_thinking
+                    changed = true
+                end
+            end
+
+            if changed then
+                body_json = cjson.encode(payload)
+            end
+        end
     end
 
     -- Resolve model -> chute_id
@@ -400,7 +411,9 @@ function _M.handle()
     end
 
     if not is_streaming then
-        local decrypted, round_err = _M.e2ee_round_trip(api_key, model, body, false, original_path)
+        local decrypted, round_err = _M.e2ee_round_trip(
+            api_key, model, body, false, original_path, nil, payload
+        )
         if not decrypted then
             if round_err.raw then
                 ngx.status = round_err.status
@@ -430,7 +443,8 @@ function _M.handle()
                         ngx.flush(true)
                     end
                 end
-            end)
+            end,
+            payload)
 
         if round_err then
             if round_err.raw then
